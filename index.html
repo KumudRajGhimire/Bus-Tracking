@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bus Tracking System</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+        }
+        .phone {
+            width: 360px;
+            height: 640px;
+            border: 16px solid black;
+            border-radius: 36px;
+            padding: 20px;
+            background: white;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .phone:before {
+            content: '';
+            display: block;
+            width: 60px;
+            height: 5px;
+            background: #333;
+            border-radius: 10px;
+            margin: 10px auto;
+        }
+        h1 {
+            margin-bottom: 20px;
+        }
+        #map {
+            height: 400px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        #message-bubble {
+            display: none;
+            position: absolute;
+            bottom: 20px;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            font-size: larger;
+        }
+        .header {
+            width: 100%;
+            text-align: center;
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="phone">
+        <div class="header">Users screen</div>
+        <h1>Bus Tracking System</h1>
+        <div id="map"></div>
+        <div id="message-bubble">Bus has arrived</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.min.js"></script>
+    <script>
+        var socket = io.connect('http://' + document.domain + ':' + location.port);
+
+        var map;
+        var commuterMarker;
+        var busMarkers = {};
+        var routeLine;
+        var messageBubble = document.getElementById('message-bubble');
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                zoom: 12,
+                center: { lat: 0, lng: 0 }
+            });
+
+            var busIcon = {
+                url: 'https://maps.google.com/mapfiles/kml/shapes/bus.png',
+                scaledSize: new google.maps.Size(32, 32)
+            };
+
+            var commuterIcon = {
+                url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png',
+                scaledSize: new google.maps.Size(32, 32)
+            };
+
+            var buses = {{ buses|tojson }};
+            var commuter = {{ commuter|tojson }};
+
+            commuterMarker = new google.maps.Marker({
+                position: { lat: commuter.lat, lng: commuter.lng },
+                map: map,
+                icon: commuterIcon,
+                title: 'Commuter'
+            });
+
+            buses.forEach(function(bus) {
+                if (bus.active) {
+                    var marker = new google.maps.Marker({
+                        position: { lat: bus.lat, lng: bus.lng },
+                        map: map,
+                        icon: busIcon,
+                        title: bus.route
+                    });
+                    busMarkers[bus.id] = marker;
+                }
+            });
+
+            updateRouteAndETA(); // Call updateRouteAndETA immediately
+
+            socket.on('location_update', function(data) {
+                var lat = parseFloat(data.lat);
+                var lng = parseFloat(data.lng);
+                if (data.type === 'bus') {
+                    var busId = data.id;
+                    if (data.stop) {
+                        if (busMarkers[busId]) {
+                            busMarkers[busId].setMap(null);
+                            delete busMarkers[busId];
+                        }
+                    } else {
+                        if (busMarkers[busId]) {
+                            busMarkers[busId].setPosition(new google.maps.LatLng(lat, lng));
+                        } else {
+                            var marker = new google.maps.Marker({
+                                position: { lat: lat, lng: lng },
+                                map: map,
+                                icon: busIcon,
+                                title: data.route || 'New Bus'
+                            });
+                            busMarkers[busId] = marker;
+                        }
+                        updateRouteAndETA();
+                    }
+                } else if (data.type === 'commuter') {
+                    commuterMarker.setPosition(new google.maps.LatLng(lat, lng));
+                    updateRouteAndETA();
+                }
+            });
+
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition(function(position) {
+                    var lat = position.coords.latitude;
+                    var lng = position.coords.longitude;
+
+                    socket.emit('update_location', { id: 'commuter', type: 'commuter', lat: lat, lng: lng });
+
+                    var userLocation = new google.maps.LatLng(lat, lng);
+                    map.setCenter(userLocation);
+                    map.setZoom(15);
+
+                    commuterMarker.setPosition(userLocation);
+                    updateRouteAndETA();
+                }, function(error) {
+                    console.error(error);
+                }, {
+                    enableHighAccuracy: true,
+                    timeout: 5000,
+                    maximumAge: 0
+                });
+            } else {
+                alert('Geolocation is not supported by this browser.');
+            }
+        }
+
+        function updateRouteAndETA() {
+            var userLocation = commuterMarker.getPosition();
+            var nearestBus = getNearestBus(userLocation);
+
+            if (nearestBus) {
+                var busLocation = nearestBus.getPosition();
+
+                if (routeLine) {
+                    routeLine.setMap(null);
+                }
+
+                routeLine = new google.maps.Polyline({
+                    path: [userLocation, busLocation],
+                    geodesic: true,
+                    strokeColor: '#0000FF',
+                    strokeOpacity: 1.0,
+                    strokeWeight: 2
+                });
+
+                routeLine.setMap(map);
+
+                var distance = google.maps.geometry.spherical.computeDistanceBetween(userLocation, busLocation);
+                if (distance < 50) { // 50 meters threshold for arrival
+                    messageBubble.style.display = 'block';
+                } else {
+                    messageBubble.style.display = 'none';
+                }
+
+                calculateETA(distance);
+            }
+        }
+
+        function calculateETA(distance) {
+            // Speed is 30 km/hr, convert it to meters per second
+            var speed = 30 * 1000 / 3600; // 30 km/hr in m/s
+            var etaInSeconds = distance / speed;
+            var etaInMinutes = Math.round(etaInSeconds / 60);
+
+            messageBubble.style.display = 'block';
+	    if(etaInMinutes!=0){
+            messageBubble.innerHTML = 'Bus arriving in ' + etaInMinutes + ' minutes';}
+	    else{
+		messageBubble.innerHTML = 'Bus has Arrived!';
+}
+        }
+
+        function getNearestBus(userLocation) {
+            var nearestBus = null;
+            var shortestDistance = Infinity;
+
+            Object.values(busMarkers).forEach(function(marker) {
+                var busLocation = marker.getPosition();
+                var distance = google.maps.geometry.spherical.computeDistanceBetween(userLocation, busLocation);
+
+                if (distance < shortestDistance) {
+                    shortestDistance = distance;
+                    nearestBus = marker;
+                }
+            });
+
+            return nearestBus;
+        }
+    </script>
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCx-V0I0Sc5v66lQe_HVCOVG6l1lV7jCBw&libraries=geometry&callback=initMap"></script>
+</body>
+</html>

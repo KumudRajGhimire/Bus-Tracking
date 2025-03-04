@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bus Location Update</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+        }
+        .phone {
+            width: 360px;
+            height: 640px;
+            border: 16px solid black;
+            border-radius: 36px;
+            padding: 20px;
+            background: white;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .phone:before {
+            content: '';
+            display: block;
+            width: 60px;
+            height: 5px;
+            background: #333;
+            border-radius: 10px;
+            margin: 10px auto;
+        }
+        h1 {
+            margin-bottom: 20px;
+        }
+        form {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        label, input, button {
+            margin: 5px 0;
+        }
+        .header {
+            width: 100%;
+            text-align: center;
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="phone">
+        <div class="header">Drivers screen</div>
+        <h1>Bus Location Update</h1>
+        <form id="locationForm">
+            <label for="id">Bus ID:</label>
+            <input type="number" id="id" name="id" required><br>
+            <button type="button" onclick="startUpdatingLocation()">Start Updating Location</button>
+            <button type="button" onclick="stopUpdatingLocation()">Stop Updating Location</button>
+        </form>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.min.js"></script>
+    <script>
+        var socket = io.connect('http://' + document.domain + ':' + location.port);
+        var watchId;
+
+        function startUpdatingLocation() {
+            var id = document.getElementById('id').value;
+            if (!id) {
+                alert('Please enter a Bus ID');
+                return;
+            }
+
+            if (navigator.geolocation) {
+                watchId = navigator.geolocation.watchPosition(function(position) {
+                    var lat = position.coords.latitude;
+                    var lng = position.coords.longitude;
+
+                    socket.emit('update_location', { id: id, type: 'bus', lat: lat, lng: lng });
+                }, function(error) {
+                    console.error(error);
+                }, {
+                    enableHighAccuracy: true,
+                    timeout: 5000,
+                    maximumAge: 0
+                });
+
+                alert('Location updates started.');
+            } else {
+                alert('Geolocation is not supported by this browser.');
+            }
+        }
+
+        function stopUpdatingLocation() {
+            var id = document.getElementById('id').value;
+            if (!id) {
+                alert('Please enter a Bus ID');
+                return;
+            }
+
+            if (watchId) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+                socket.emit('update_location', { id: id, type: 'bus', stop: true });
+                alert('Location updates stopped.');
+            } else {
+                alert('Location updates are not currently running.');
+            }
+        }
+    </script>
+</body>
+</html>
